@@ -98,6 +98,7 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile.dev
+    command: npm run dev -- --host 0.0.0.0
     expose:
       - "5173"
     environment:
@@ -114,6 +115,14 @@ services:
     networks:
       - default
       - dokploy-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=dokploy-network"
+      - "traefik.http.routers.securo-fe.rule=Host(`securo.seudominio.com`)"
+      - "traefik.http.routers.securo-fe.entrypoints=web,websecure"
+      - "traefik.http.routers.securo-fe.tls=true"
+      - "traefik.http.routers.securo-fe.tls.certresolver=letsencrypt"
+      - "traefik.http.services.securo-fe.loadbalancer.server.port=5173"
 
   celery-worker:
     <<: *a2
