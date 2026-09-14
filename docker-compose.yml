@@ -1,24 +1,20 @@
 name: securo
 
-# podman-compose groups all services into a single pod by default, which
-# interferes with per-service port mapping and networking. Disabling it makes
-# podman-compose behave like Docker Compose. Docker ignores unknown top-level
-# x- keys.
 x-podman:
   in_pod: false
 
-x-backend-env: &backend-env
+x-backend-env: &a1
   DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/securo
   SECRET_KEY: ${SECRET_KEY:-dev-secret-change-in-production}
   DEBUG: ${DEBUG:-true}
-  FRONTEND_URL: http://localhost:${FRONTEND_PORT:-3000}
+  FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
   PLUGGY_CLIENT_ID: ${PLUGGY_CLIENT_ID:-}
   PLUGGY_CLIENT_SECRET: ${PLUGGY_CLIENT_SECRET:-}
-  PLUGGY_OAUTH_REDIRECT_URI: http://localhost:${FRONTEND_PORT:-3000}/oauth/callback
+  PLUGGY_OAUTH_REDIRECT_URI: ${FRONTEND_URL:-http://localhost:3000}/oauth/callback
   ENABLE_BANKING_APP_ID: ${ENABLE_BANKING_APP_ID:-}
   ENABLE_BANKING_PRIVATE_KEY_FILE: ${ENABLE_BANKING_PRIVATE_KEY_FILE:-/app/secrets/enable_banking_private.pem}
   ENABLE_BANKING_API_URL: ${ENABLE_BANKING_API_URL:-https://api.enablebanking.com}
-  ENABLE_BANKING_OAUTH_REDIRECT_URI: ${ENABLE_BANKING_OAUTH_REDIRECT_URI:-http://localhost:${FRONTEND_PORT:-3000}/oauth/callback}
+  ENABLE_BANKING_OAUTH_REDIRECT_URI: ${FRONTEND_URL:-http://localhost:3000}/oauth/callback
   SIMPLEFIN_ENABLED: ${SIMPLEFIN_ENABLED:-false}
   SIMPLEFIN_API_URL: ${SIMPLEFIN_API_URL:-https://beta-bridge.simplefin.org}
   REDIS_URL: redis://redis:6379/0
@@ -26,16 +22,11 @@ x-backend-env: &backend-env
   FX_SYNC_MODE: ${FX_SYNC_MODE:-on_demand}
   STORAGE_LOCAL_PATH: /app/data/attachments
   AGENTS_KNOWLEDGE_STORAGE_PATH: /app/data/agent_knowledge
-  # Agents/LLM feature — opt-in. Off by default so existing users pay
-  # zero cost. Run `docker compose --profile agents up` after enabling.
   AGENTS_ENABLED: ${AGENTS_ENABLED:-false}
   AGENTS_BUILTIN_MCP_URL: ${AGENTS_BUILTIN_MCP_URL:-http://mcp-server:8765/mcp}
   AGENTS_EXTRA_MCP_SERVERS: ${AGENTS_EXTRA_MCP_SERVERS:-}
   AGENTS_MCP_JWT_SECRET: ${AGENTS_MCP_JWT_SECRET:-dev-mcp-secret-change-in-production}
-  # TTL for tokens minted from /agents/connections → "External MCP access".
-  # Used by Claude Desktop, n8n, custom clients plugging into Securo.
   AGENTS_MCP_EXTERNAL_TTL_DAYS: ${AGENTS_MCP_EXTERNAL_TTL_DAYS:-90}
-  # LLM provider config — only the provider you actually use needs setting.
   AGENTS_DEFAULT_PROVIDER: ${AGENTS_DEFAULT_PROVIDER:-ollama}
   AGENTS_DEFAULT_MODEL: ${AGENTS_DEFAULT_MODEL:-}
   AGENTS_OLLAMA_BASE_URL: ${AGENTS_OLLAMA_BASE_URL:-http://ollama:11434}
@@ -43,18 +34,17 @@ x-backend-env: &backend-env
   AGENTS_ANTHROPIC_API_KEY: ${AGENTS_ANTHROPIC_API_KEY:-}
   AGENTS_OPENAI_COMPAT_BASE_URL: ${AGENTS_OPENAI_COMPAT_BASE_URL:-}
   AGENTS_OPENAI_COMPAT_API_KEY: ${AGENTS_OPENAI_COMPAT_API_KEY:-}
-  # Knowledge-base embeddings. `native` (default) uses fastembed with a
-  # bundled multilingual model — zero external setup. Override with
-  # ollama/openai/openai_compatible for better quality.
   AGENTS_EMBEDDING_PROVIDER: ${AGENTS_EMBEDDING_PROVIDER:-native}
   AGENTS_EMBEDDING_MODEL: ${AGENTS_EMBEDDING_MODEL:-sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2}
 
-x-backend-base: &backend-base
+x-backend-base: &a2
   build: ./backend
-  environment: *backend-env
+  environment: *a1
   depends_on:
-    db: { condition: service_healthy }
-    redis: { condition: service_healthy }
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
   volumes:
     - ./backend:/app
     - ./secrets:/app/secrets:ro
@@ -62,20 +52,25 @@ x-backend-base: &backend-base
     - agent_knowledge:/app/data/agent_knowledge
     - agent_embedding_models:/app/data/embedding_models
   restart: unless-stopped
+  networks:
+    - default
+    - dokploy-network
 
 services:
   redis:
     image: docker.io/library/redis:7-alpine
     healthcheck:
-      test: ['CMD', 'redis-cli', 'ping']
+      test:
+        - CMD
+        - redis-cli
+        - ping
       interval: 5s
       timeout: 3s
       retries: 5
+    networks:
+      - default
 
   db:
-    # docker.io/pgvector/pgvector:pg16 is a drop-in replacement for postgres:16
-    # that ships the `vector` extension. Required for the agents
-    # knowledge base; harmless when AGENTS_ENABLED=false.
     image: ${DB_IMAGE:-docker.io/pgvector/pgvector:pg16}
     environment:
       POSTGRES_USER: postgres
@@ -84,28 +79,30 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      test:
+        - CMD-SHELL
+        - pg_isready -U postgres
       interval: 5s
       timeout: 3s
       retries: 5
+    networks:
+      - default
 
   backend:
-    <<: *backend-base
-    command:
-      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port
-      8000 --reload"
-    ports:
-      - "${BACKEND_PORT:-8000}:8000"
+    <<: *a2
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    expose:
+      - "8000"
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile.dev
-    ports:
-      - "${FRONTEND_PORT:-3000}:5173"
+    expose:
+      - "5173"
     environment:
       BACKEND_URL: http://backend:8000
-      FRONTEND_URL: http://localhost:3000
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
       APP_VERSION_ROOT: /workspace
     depends_on:
       - backend
@@ -114,34 +111,32 @@ services:
       - ./:/workspace:ro
       - /app/node_modules
     restart: unless-stopped
+    networks:
+      - default
+      - dokploy-network
 
   celery-worker:
-    <<: *backend-base
-    # Limit to 2 workers to save RAM (default = number of CPUs).
+    <<: *a2
     command: celery -A app.worker worker --loglevel=info --concurrency=2
 
   celery-beat:
-    <<: *backend-base
+    <<: *a2
     command: celery -A app.worker beat --loglevel=info
 
-  # Optional: Securo built-in MCP server. Only starts under the `agents`
-  # profile (`docker compose --profile agents up`). Reuses the backend
-  # image, just runs a different uvicorn entry point. Modular by design —
-  # users not using the agents feature pay zero cost.
-  #
-  # The port is published on the host (127.0.0.1 by default) so external
-  # agents — Claude Desktop, n8n, custom clients — can reach it after
-  # minting a token from the UI. JWT auth is always required. Override
-  # AGENTS_MCP_EXTERNAL_HOST_PORT to e.g. "0.0.0.0:8765" to expose to LAN.
   mcp-server:
-    <<: *backend-base
-    profiles: [agents]
+    <<: *a2
+    profiles:
+      - agents
     command: uvicorn mcp_server.main:app --host 0.0.0.0 --port 8765
-    ports:
-      - "${AGENTS_MCP_EXTERNAL_HOST_PORT:-127.0.0.1:8765}:8765"
+    expose:
+      - "8765"
 
 volumes:
   pgdata:
   attachments:
   agent_knowledge:
   agent_embedding_models:
+
+networks:
+  dokploy-network:
+    external: true
