@@ -115,14 +115,6 @@ services:
     networks:
       - default
       - dokploy-network
-    labels:
-      - "traefik.enable=true"
-      - "traefik.docker.network=dokploy-network"
-      - "traefik.http.routers.securo-fe.rule=Host(`securo.paraviana.com`)"
-      - "traefik.http.routers.securo-fe.entrypoints=web,websecure"
-      - "traefik.http.routers.securo-fe.tls=true"
-      - "traefik.http.routers.securo-fe.tls.certresolver=letsencrypt"
-      - "traefik.http.services.securo-fe.loadbalancer.server.port=5173"
 
   celery-worker:
     <<: *a2
