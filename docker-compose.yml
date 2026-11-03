@@ -59,6 +59,8 @@ x-backend-base: &a2
 services:
   redis:
     image: docker.io/library/redis:7-alpine
+    command: redis-server
+    restart: unless-stopped
     healthcheck:
       test:
         - CMD
@@ -72,6 +74,7 @@ services:
 
   db:
     image: ${DB_IMAGE:-docker.io/pgvector/pgvector:pg16}
+    restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
