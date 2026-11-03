@@ -50,4 +50,133 @@ x-backend-env: &backend-env
   AGENTS_EXTRA_MCP_SERVERS: ${AGENTS_EXTRA_MCP_SERVERS:-}
   AGENTS_MCP_JWT_SECRET: ${AGENTS_MCP_JWT_SECRET:-dev-mcp-secret-change-in-production}
   AGENTS_MCP_EXTERNAL_TTL_DAYS: ${AGENTS_MCP_EXTERNAL_TTL_DAYS:-90}
-  AGENTS_
+  AGENTS_MCP_ALLOWED_ORIGINS: ${AGENTS_MCP_ALLOWED_ORIGINS:-}
+  AGENTS_DEFAULT_PROVIDER: ${AGENTS_DEFAULT_PROVIDER:-ollama}
+  AGENTS_DEFAULT_MODEL: ${AGENTS_DEFAULT_MODEL:-}
+  AGENTS_OLLAMA_BASE_URL: ${AGENTS_OLLAMA_BASE_URL:-http://ollama:11434}
+  AGENTS_OPENAI_API_KEY: ${AGENTS_OPENAI_API_KEY:-}
+  AGENTS_ANTHROPIC_API_KEY: ${AGENTS_ANTHROPIC_API_KEY:-}
+  AGENTS_OPENAI_COMPAT_BASE_URL: ${AGENTS_OPENAI_COMPAT_BASE_URL:-}
+  AGENTS_OPENAI_COMPAT_API_KEY: ${AGENTS_OPENAI_COMPAT_API_KEY:-}
+  AGENTS_EMBEDDING_PROVIDER: ${AGENTS_EMBEDDING_PROVIDER:-native}
+  AGENTS_EMBEDDING_MODEL: ${AGENTS_EMBEDDING_MODEL:-sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2}
+
+x-backend-base: &backend-base
+  build: ./backend
+  environment: *backend-env
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  entrypoint: ["sh", "-c", 'alembic current --check-heads && exec "$$@"', "sh"]
+  depends_on:
+    db: { condition: service_healthy }
+    redis: { condition: service_healthy }
+    migrate: { condition: service_completed_successfully }
+  volumes:
+    - ./backend:/app
+    - ./secrets:/app/secrets:ro
+    - attachments:/app/data/attachments
+    - agent_knowledge:/app/data/agent_knowledge
+    - agent_embedding_models:/app/data/embedding_models
+  restart: unless-stopped
+  networks:
+    - default
+    - dokploy-network
+
+services:
+  redis:
+    image: docker.io/library/redis:8-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - default
+
+  db:
+    image: ${DB_IMAGE:-docker.io/pgvector/pgvector:pg16}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: securo
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - default
+
+  migrate:
+    <<: *backend-base
+    restart: "no"
+    entrypoint: ["alembic"]
+    command: upgrade head
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    networks:
+      - default
+
+  backend:
+    <<: *backend-base
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5)"]
+      interval: 5s
+      timeout: 6s
+      start_period: 30s
+      retries: 12
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    expose:
+      - "8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    command: npm run dev -- --host 0.0.0.0 --cors
+    expose:
+      - "5173"
+    environment:
+      BACKEND_URL: http://backend:8000
+      FRONTEND_URL: ${FRONTEND_URL:-}
+      APP_VERSION_ROOT: /workspace
+    depends_on:
+      backend: { condition: service_healthy }
+    volumes:
+      - ./frontend:/app
+      - ./:/workspace:ro
+      - /app/node_modules
+    restart: unless-stopped
+    networks:
+      - default
+      - dokploy-network
+
+  celery-worker:
+    <<: *backend-base
+    command: celery -A app.worker worker --loglevel=info --concurrency=2
+
+  celery-beat:
+    <<: *backend-base
+    command: celery -A app.worker beat --loglevel=info
+
+  mcp-server:
+    <<: *backend-base
+    profiles: [agents]
+    command: uvicorn mcp_server.main:app --host 0.0.0.0 --port 8765
+    expose:
+      - "8765"
+
+volumes:
+  pgdata:
+  attachments:
+  agent_knowledge:
+  agent_embedding_models:
+
+networks:
+  dokploy-network:
+    external: true
