@@ -118,7 +118,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=dokploy-network"
-      - "traefik.http.routers.securo-fe.rule=Host(`securo.seudominio.com`)"
+      - "traefik.http.routers.securo-fe.rule=Host(`securo.paraviana.com`)"
       - "traefik.http.routers.securo-fe.entrypoints=web,websecure"
       - "traefik.http.routers.securo-fe.tls=true"
       - "traefik.http.routers.securo-fe.tls.certresolver=letsencrypt"
